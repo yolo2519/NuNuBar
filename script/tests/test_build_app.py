@@ -20,10 +20,20 @@ class BuildAppScriptTests(unittest.TestCase):
             "build_app.sh must not copy bundle files with cp; cp preserves FinderInfo",
         )
 
-    def test_codesign_clears_detritus_before_signing_the_app(self) -> None:
-        clear_at = self.source.index("xattr -cr \"$OUTPUT_APP\"")
+    def test_codesign_happens_on_a_tmp_stage_before_copying_to_output(self) -> None:
+        self.assertIn("nunubar-appbuild", self.source)
+        self.assertIn("COPYFILE_DISABLE=1", self.source)
+        clear_at = self.source.index('xattr -cr "$app"')
         app_sign_at = self.source.index("codesign --force --sign - --requirements")
+        copy_out_at = self.source.index(
+            'copy_without_mac_metadata "$STAGE_APP" "$OUTPUT_APP"'
+        )
         self.assertLess(clear_at, app_sign_at)
+        self.assertLess(app_sign_at, copy_out_at)
+        self.assertLess(
+            self.source.index('codesign --verify --deep --strict "$STAGE_APP"'),
+            copy_out_at,
+        )
 
 
 if __name__ == "__main__":

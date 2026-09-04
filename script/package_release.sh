@@ -10,18 +10,19 @@ STAGE_DIR="$(mktemp -d /tmp/NuNuBar-release.XXXXXX)"
 trap 'rm -rf "$STAGE_DIR"' EXIT
 
 APP_PATH="$DIST_DIR/$APP_NAME.app"
+STAGED_APP="$STAGE_DIR/$APP_NAME.app"
 IMAGE_DIR="$STAGE_DIR/image"
 TEMP_DMG="$STAGE_DIR/$APP_NAME.dmg"
 
-mkdir -p "$DIST_DIR"
-"$ROOT_DIR/script/build_app.sh" "$APP_PATH" >/dev/null
+mkdir -p "$DIST_DIR" "$IMAGE_DIR"
+"$ROOT_DIR/script/build_app.sh" "$STAGED_APP"
+codesign --verify --deep --strict "$STAGED_APP"
 
-mkdir -p "$IMAGE_DIR"
-ditto --norsrc --noextattr --noqtn --noacl "$APP_PATH" "$IMAGE_DIR/$APP_NAME.app"
+ditto --norsrc --noextattr --noqtn --noacl "$STAGED_APP" "$IMAGE_DIR/$APP_NAME.app"
+ditto --norsrc --noextattr --noqtn --noacl "$STAGED_APP" "$APP_PATH"
 ln -s /Applications "$IMAGE_DIR/Applications"
 
 rm -f "$DMG_PATH"
-codesign --verify --deep --strict "$APP_PATH"
 hdiutil create \
   -volname "$APP_NAME" \
   -srcfolder "$IMAGE_DIR" \

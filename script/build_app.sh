@@ -10,6 +10,9 @@ SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 MIN_SYSTEM_VERSION="14.0"
 DESIGNATED_REQUIREMENT="designated => identifier \"$BUNDLE_ID\""
 
+# Prevent copyfile xattrs from being reapplied while assembling the bundle.
+export COPYFILE_DISABLE=1
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_APP="${1:-$ROOT_DIR/dist/$APP_NAME.app}"
 
@@ -18,7 +21,16 @@ if [ "$(basename "$OUTPUT_APP")" != "$APP_NAME.app" ]; then
   exit 2
 fi
 
-APP_CONTENTS="$OUTPUT_APP/Contents"
+# Desktop/iCloud trees reapply FinderInfo to dist/ immediately. Assemble and
+# codesign under /tmp, then copy the already-signed app to the requested path.
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nunubar-appbuild.XXXXXX")"
+cleanup_work_dir() {
+  rm -rf "$WORK_DIR"
+}
+trap cleanup_work_dir EXIT
+STAGE_APP="$WORK_DIR/$APP_NAME.app"
+
+APP_CONTENTS="$STAGE_APP/Contents"
 APP_MACOS="$APP_CONTENTS/MacOS"
 APP_HELPERS="$APP_CONTENTS/Helpers"
 APP_FRAMEWORKS="$APP_CONTENTS/Frameworks"
@@ -48,16 +60,19 @@ copy_without_mac_metadata() {
 }
 
 clear_codesign_detritus() {
-  # FinderInfo / resource forks from Desktop and iCloud copies make codesign
-  # fail with: resource fork, Finder information, or similar detritus not allowed
-  xattr -cr "$OUTPUT_APP"
+  local app="$1"
+  find "$app" \( -name '._*' -o -name '.DS_Store' \) -delete
+  if command -v dot_clean >/dev/null 2>&1; then
+    dot_clean -m "$app" >/dev/null 2>&1 || true
+  fi
+  xattr -cr "$app"
 }
 
 cd "$ROOT_DIR"
 swift build -c release
 BIN_DIR="$(swift build -c release --show-bin-path)"
 
-rm -rf "$OUTPUT_APP"
+rm -rf "$STAGE_APP"
 mkdir -p "$APP_MACOS" "$APP_HELPERS" "$APP_FRAMEWORKS" "$APP_RESOURCES"
 copy_without_mac_metadata "$BIN_DIR/$PRODUCT_NAME" "$APP_BINARY"
 copy_without_mac_metadata "$BIN_DIR/agent-light" "$APP_HELPERS/agent-light"
@@ -129,19 +144,24 @@ cat >"$INFO_PLIST" <<PLIST
 </plist>
 PLIST
 
-clear_codesign_detritus
+clear_codesign_detritus "$STAGE_APP"
 
 if [ "$SIGN_IDENTITY" = "-" ]; then
   codesign --force --sign - "$APP_FRAMEWORKS/libusb-1.0.0.dylib"
   codesign --force --sign - "$APP_HELPERS/agent-light"
   codesign --force --sign - "$APP_HELPERS/dfu-util"
-  codesign --force --sign - --requirements "=$DESIGNATED_REQUIREMENT" "$OUTPUT_APP"
+  codesign --force --sign - --requirements "=$DESIGNATED_REQUIREMENT" "$STAGE_APP"
 else
   codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_FRAMEWORKS/libusb-1.0.0.dylib"
   codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_HELPERS/agent-light"
   codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_HELPERS/dfu-util"
-  codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$OUTPUT_APP"
+  codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$STAGE_APP"
 fi
+codesign --verify --deep --strict "$STAGE_APP"
+
+mkdir -p "$(dirname "$OUTPUT_APP")"
+rm -rf "$OUTPUT_APP"
+copy_without_mac_metadata "$STAGE_APP" "$OUTPUT_APP"
 codesign --verify --deep --strict "$OUTPUT_APP"
 
 echo "$OUTPUT_APP"
