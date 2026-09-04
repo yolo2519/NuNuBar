@@ -43,26 +43,36 @@ for code_path in "$DFU_UTIL_SOURCE" "$LIBUSB_SOURCE"; do
   fi
 done
 
+copy_without_mac_metadata() {
+  ditto --norsrc --noextattr --noqtn --noacl "$1" "$2"
+}
+
+clear_codesign_detritus() {
+  # FinderInfo / resource forks from Desktop and iCloud copies make codesign
+  # fail with: resource fork, Finder information, or similar detritus not allowed
+  xattr -cr "$OUTPUT_APP"
+}
+
 cd "$ROOT_DIR"
 swift build -c release
 BIN_DIR="$(swift build -c release --show-bin-path)"
 
 rm -rf "$OUTPUT_APP"
 mkdir -p "$APP_MACOS" "$APP_HELPERS" "$APP_FRAMEWORKS" "$APP_RESOURCES"
-cp "$BIN_DIR/$PRODUCT_NAME" "$APP_BINARY"
-cp "$BIN_DIR/agent-light" "$APP_HELPERS/agent-light"
-cp "$DFU_UTIL_SOURCE" "$APP_HELPERS/dfu-util"
-cp "$LIBUSB_SOURCE" "$APP_FRAMEWORKS/libusb-1.0.0.dylib"
+copy_without_mac_metadata "$BIN_DIR/$PRODUCT_NAME" "$APP_BINARY"
+copy_without_mac_metadata "$BIN_DIR/agent-light" "$APP_HELPERS/agent-light"
+copy_without_mac_metadata "$DFU_UTIL_SOURCE" "$APP_HELPERS/dfu-util"
+copy_without_mac_metadata "$LIBUSB_SOURCE" "$APP_FRAMEWORKS/libusb-1.0.0.dylib"
 chmod u+w "$APP_HELPERS/dfu-util" "$APP_FRAMEWORKS/libusb-1.0.0.dylib"
-cp "$ROOT_DIR/Sources/AgentLightApp/Resources/NuNuBar.icns" "$APP_RESOURCES/NuNuBar.icns"
-cp "$ROOT_DIR/Sources/AgentLightApp/Resources/NuNuBarMenuBarIcon.png" "$APP_RESOURCES/NuNuBarMenuBarIcon.png"
-cp -R "$ROOT_DIR/Sources/AgentLightApp/Resources/Firmware" "$APP_RESOURCES/Firmware"
-cp -R "$ROOT_DIR/Sources/AgentLightApp/Resources/Licenses" "$APP_RESOURCES/Licenses"
+copy_without_mac_metadata "$ROOT_DIR/Sources/AgentLightApp/Resources/NuNuBar.icns" "$APP_RESOURCES/NuNuBar.icns"
+copy_without_mac_metadata "$ROOT_DIR/Sources/AgentLightApp/Resources/NuNuBarMenuBarIcon.png" "$APP_RESOURCES/NuNuBarMenuBarIcon.png"
+copy_without_mac_metadata "$ROOT_DIR/Sources/AgentLightApp/Resources/Firmware" "$APP_RESOURCES/Firmware"
+copy_without_mac_metadata "$ROOT_DIR/Sources/AgentLightApp/Resources/Licenses" "$APP_RESOURCES/Licenses"
 mkdir -p "$APP_RESOURCES/Licenses/FirmwareSource"
-cp -R "$ROOT_DIR/firmware/." "$APP_RESOURCES/Licenses/FirmwareSource/"
+copy_without_mac_metadata "$ROOT_DIR/firmware" "$APP_RESOURCES/Licenses/FirmwareSource"
 
 for asset in Codex.png ClaudeCode.png Antigravity.png GrokBuild.svg Hermes.png OpenClaw.png; do
-  cp "$ROOT_DIR/Sources/AgentLightApp/Resources/AgentIcons/$asset" "$APP_RESOURCES/$asset"
+  copy_without_mac_metadata "$ROOT_DIR/Sources/AgentLightApp/Resources/AgentIcons/$asset" "$APP_RESOURCES/$asset"
 done
 
 LIBUSB_LINK="$(otool -L "$APP_HELPERS/dfu-util" | awk '/libusb-1.0.0.dylib/{print $1; exit}')"
@@ -118,6 +128,8 @@ cat >"$INFO_PLIST" <<PLIST
 </dict>
 </plist>
 PLIST
+
+clear_codesign_detritus
 
 if [ "$SIGN_IDENTITY" = "-" ]; then
   codesign --force --sign - "$APP_FRAMEWORKS/libusb-1.0.0.dylib"
